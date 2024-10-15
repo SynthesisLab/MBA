@@ -25,7 +25,7 @@ struct Variable
 {
    int var;
 
-   Variable(int v) : var(v) {}
+   explicit Variable(int v) : var(v) {}
 };
 
 // Unary operation
@@ -63,7 +63,7 @@ std::string to_string(UnOp op)
    switch (op)
    {
    case UnOp::Not: return "~";
-   default: return "?";
+   default: throw std::runtime_error("Unknown unary operator");
    }
 }
 
@@ -78,7 +78,7 @@ std::string to_string(BinOp op)
    case BinOp::And: return "&";
    case BinOp::Or: return "|";
    case BinOp::Xor: return "^";
-   default: return "?";
+   default: throw std::runtime_error("Unknown binary operator");
    }
 }
 
@@ -120,24 +120,25 @@ std::vector<std::set<std::shared_ptr<Formula>>> generateFormulas(int n) {
 // Print formula
 void printFormula(const Formula& formula)
 {
-   std::visit([](auto&& arg)
-      {
-         using T = std::decay_t<decltype(arg)>;
-         if constexpr (std::is_same_v<T, Variable>) {
-            std::cout << "Var(" << arg.var << ")";
-         }
-         else if constexpr (std::is_same_v<T, BinaryOperation>) {
-            std::cout << "(";
-            printFormula(*arg.left);
-            std::cout << " " << to_string(arg.op) << " ";
-            printFormula(*arg.right);
-            std::cout << ")";
-         }
-         else if constexpr (std::is_same_v<T, UnaryOperation>) {
-            std::cout << "(" << to_string(arg.op) << " ";
-            printFormula(*arg.operand);
-            std::cout << ")";
-         } }, formula.expr);
+   std::visit([](auto&& arg) {
+      using T = std::decay_t<decltype(arg)>;
+
+      if constexpr (std::is_same_v<T, Variable>) {
+         std::cout << "Var(" << arg.var << ")";
+      }
+      else if constexpr (std::is_same_v<T, BinaryOperation>) {
+         std::cout << "(";
+         printFormula(*arg.left);
+         std::cout << " " << to_string(arg.op) << " ";
+         printFormula(*arg.right);
+         std::cout << ")";
+      }
+      else if constexpr (std::is_same_v<T, UnaryOperation>) {
+         std::cout << "(" << to_string(arg.op) << " ";
+         printFormula(*arg.operand);
+         std::cout << ")";
+      }
+      }, formula.expr);
 }
 
 // Print generated formulas
@@ -208,6 +209,25 @@ std::vector<Example> readExamples(const std::string& filename) {
    return examples;
 }
 
+uint64_t evaluateUnaryOperation(UnOp op, uint64_t operandValue) {
+   switch (op) {
+   case UnOp::Not: return ~operandValue;
+   default: throw std::runtime_error("Unsupported unary operation");
+   }
+}
+
+uint64_t evaluateBinaryOperation(BinOp op, uint64_t leftValue, uint64_t rightValue) {
+   switch (op) {
+   case BinOp::Plus: return leftValue + rightValue;
+   case BinOp::Minus: return leftValue - rightValue;
+   case BinOp::Mult: return leftValue * rightValue;
+   case BinOp::And: return leftValue & rightValue;
+   case BinOp::Or: return leftValue | rightValue;
+   case BinOp::Xor: return leftValue ^ rightValue;
+   default: throw std::runtime_error("Unsupported binary operation");
+   }
+}
+
 // Evaluate formula on inputs
 uint64_t evaluateFormula(const Formula& formula, const std::vector<uint64_t>& inputs) {
    return std::visit([&inputs](auto&& arg) -> uint64_t {
@@ -218,23 +238,12 @@ uint64_t evaluateFormula(const Formula& formula, const std::vector<uint64_t>& in
       }
       else if constexpr (std::is_same_v<T, UnaryOperation>) {
          uint64_t operandValue = evaluateFormula(*arg.operand, inputs);
-         switch (arg.op) {
-         case UnOp::Not: return ~operandValue;
-         default: throw std::runtime_error("Unsupported unary operation");
-         }
+         return evaluateUnaryOperation(arg.op, operandValue);
       }
       else if constexpr (std::is_same_v<T, BinaryOperation>) {
          uint64_t leftValue = evaluateFormula(*arg.left, inputs);
          uint64_t rightValue = evaluateFormula(*arg.right, inputs);
-         switch (arg.op) {
-         case BinOp::Plus: return leftValue + rightValue;
-         case BinOp::Minus: return leftValue - rightValue;
-         case BinOp::Mult: return leftValue * rightValue;
-         case BinOp::And: return leftValue & rightValue;
-         case BinOp::Or: return leftValue | rightValue;
-         case BinOp::Xor: return leftValue ^ rightValue;
-         default: throw std::runtime_error("Unsupported binary operation");
-         }
+         return evaluateBinaryOperation(arg.op, leftValue, rightValue);
       }
       }, formula.expr);
 }
