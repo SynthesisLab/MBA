@@ -12,7 +12,7 @@ using json = nlohmann::json;
 
 int numVar = 2;
 
-struct Formula;
+class Formula;
 
 // Unary operators
 enum class UnOp { Not };
@@ -21,16 +21,18 @@ enum class UnOp { Not };
 enum class BinOp { Plus, Minus, Mult, And, Or, Xor };
 
 // Variables
-struct Variable
+class Variable
 {
+public:
    int var;
 
    explicit Variable(int v) : var(v) {}
 };
 
 // Unary operation
-struct UnaryOperation
+class UnaryOperation
 {
+public:
    UnOp op;
    std::shared_ptr<Formula> operand;
 
@@ -38,8 +40,9 @@ struct UnaryOperation
 };
 
 // Binary operation
-struct BinaryOperation
+class BinaryOperation
 {
+public:
    BinOp op;
    std::shared_ptr<Formula> left;
    std::shared_ptr<Formula> right;
@@ -48,8 +51,9 @@ struct BinaryOperation
 };
 
 // Formula
-struct Formula
+class Formula
 {
+public:
    std::variant<Variable, BinaryOperation, UnaryOperation> expr;
 
    Formula(Variable var) : expr(var) {}
@@ -153,8 +157,9 @@ void printFormulas(const std::vector<std::set<std::shared_ptr<Formula>>>& formul
 }
 
 // Antecedents & Image pairs
-struct Example
+class Example
 {
+public:
    std::vector<uint64_t> inputs; // Antecedents
    uint64_t output; // Image
 };
