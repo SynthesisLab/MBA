@@ -1,9 +1,9 @@
 #ifndef FORMULA_H
 #define FORMULA_H
 
-#include <vector>
 #include <memory>
 #include <variant>
+#include <vector>
 
 using namespace std;
 
