@@ -13,8 +13,8 @@ extern int numVar;
 class Example
 {
 public:
-    vector<uint64_t> inputs;
-    uint64_t output;
+    vector<uint32_t> inputs;
+    uint32_t output;
 };
 
 // Read json file

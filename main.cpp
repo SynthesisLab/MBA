@@ -11,7 +11,7 @@ using namespace std;
 // Test if a formula satisfies all examples
 bool testFormula(const Formula& formula, const vector<Example>& examples) {
    for (const auto& example : examples) {
-      uint64_t result = formula.evaluate(example.inputs);
+      uint32_t result = formula.evaluate(example.inputs);
       if (result != example.output) {
          return false;
       }
@@ -78,10 +78,10 @@ void generateFormulas(int n, const vector<Example>& examples) {
 
 int main() {
 
-   const string filename = "example_8_and_16bits.json";
+   const string filename = "samples/1.json";
    vector<Example> examples = readExamples(filename);
 
-   generateFormulas(4, examples);
+   generateFormulas(7, examples);
    return 0;
 
    // try {

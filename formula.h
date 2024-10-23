@@ -20,7 +20,7 @@ public:
 
     explicit Variable(int v);
 
-    uint64_t evaluate(const vector<uint64_t>& inputs) const;
+    uint32_t evaluate(const vector<uint32_t>& inputs) const;
 
     string toString() const;
 };
@@ -33,7 +33,7 @@ public:
 
     UnaryOperation(UnOp op, shared_ptr<Formula> operand);
 
-    uint64_t evaluate(const vector<uint64_t>& inputs) const;
+    uint32_t evaluate(const vector<uint32_t>& inputs) const;
 
     string toString() const;
 };
@@ -47,7 +47,7 @@ public:
 
     BinaryOperation(BinOp op, shared_ptr<Formula> left, shared_ptr<Formula> right);
 
-    uint64_t evaluate(const vector<uint64_t>& inputs) const;
+    uint32_t evaluate(const vector<uint32_t>& inputs) const;
 
     string toString() const;
 };
@@ -61,7 +61,7 @@ public:
     Formula(BinaryOperation binOp);
     Formula(UnaryOperation unOp);
 
-    uint64_t evaluate(const vector<uint64_t>& inputs) const;
+    uint32_t evaluate(const vector<uint32_t>& inputs) const;
 
     string toString() const;
     void printFormula() const;

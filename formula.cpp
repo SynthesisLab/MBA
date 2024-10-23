@@ -6,7 +6,7 @@ using namespace std;
 // Variable
 Variable::Variable(int v) : var(v) {}
 
-uint64_t Variable::evaluate(const std::vector<uint64_t>& inputs) const {
+uint32_t Variable::evaluate(const std::vector<uint32_t>& inputs) const {
     return inputs[var];
 }
 
@@ -19,8 +19,8 @@ UnaryOperation::UnaryOperation(UnOp op, shared_ptr<Formula> operand)
     : op(op), operand(operand) {
 }
 
-uint64_t UnaryOperation::evaluate(const vector<uint64_t>& inputs) const {
-    uint64_t operandValue = operand->evaluate(inputs);
+uint32_t UnaryOperation::evaluate(const vector<uint32_t>& inputs) const {
+    uint32_t operandValue = operand->evaluate(inputs);
     switch (op) {
     case UnOp::Not: return ~operandValue;
     default: throw runtime_error("Unsupported unary operation");
@@ -39,9 +39,9 @@ BinaryOperation::BinaryOperation(BinOp op, shared_ptr<Formula> left, shared_ptr<
     : op(op), left(left), right(right) {
 }
 
-uint64_t BinaryOperation::evaluate(const vector<uint64_t>& inputs) const {
-    uint64_t leftValue = left->evaluate(inputs);
-    uint64_t rightValue = right->evaluate(inputs);
+uint32_t BinaryOperation::evaluate(const vector<uint32_t>& inputs) const {
+    uint32_t leftValue = left->evaluate(inputs);
+    uint32_t rightValue = right->evaluate(inputs);
     switch (op) {
     case BinOp::Plus: return leftValue + rightValue;
     case BinOp::Minus: return leftValue - rightValue;
@@ -70,8 +70,8 @@ Formula::Formula(Variable var) : expr(var) {}
 Formula::Formula(BinaryOperation binOp) : expr(binOp) {}
 Formula::Formula(UnaryOperation unOp) : expr(unOp) {}
 
-uint64_t Formula::evaluate(const vector<uint64_t>& inputs) const {
-    return visit([&inputs](auto&& arg) -> uint64_t {
+uint32_t Formula::evaluate(const vector<uint32_t>& inputs) const {
+    return visit([&inputs](auto&& arg) -> uint32_t {
         return arg.evaluate(inputs);
         }, expr);
 }
