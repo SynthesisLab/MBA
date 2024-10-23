@@ -78,10 +78,10 @@ void generateFormulas(int n, const vector<Example>& examples) {
 
 int main() {
 
-   const string filename = "samples/1.json";
+   const string filename = "benchmarks/672.json";
    vector<Example> examples = readExamples(filename);
 
-   generateFormulas(7, examples);
+   generateFormulas(15, examples);
    return 0;
 
    // try {
