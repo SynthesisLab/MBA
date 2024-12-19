@@ -3,6 +3,7 @@
 #include <memory>
 #include <set>
 #include <vector>
+#include <chrono>
 #include "formula.h"
 #include "read.h"
 
@@ -10,7 +11,7 @@ using namespace std;
 
 // Test if a formula satisfies all examples
 bool testFormula(const Formula& formula, const vector<Example>& examples) {
-   for (const auto& example : examples) {
+   for (const Example& example : examples) {
       uint32_t result = formula.evaluate(example.inputs);
       if (result != example.output) {
          return false;
@@ -25,12 +26,11 @@ void generateFormulas(int n, const vector<Example>& examples) {
 
    // Initialization
    for (int i = 0; i < numVar; ++i) {
-      auto formula = make_shared<Formula>(Variable(i));
+      std::shared_ptr<Formula> formula = make_shared<Formula>(Variable(i));
       formulas[1].insert(formula);
-      formula->printFormula();
 
       if (testFormula(*formula, examples)) {
-         cout << "Found !\n";
+         formula->printFormula();
          return;
       }
    }
@@ -39,15 +39,14 @@ void generateFormulas(int n, const vector<Example>& examples) {
    for (int size = 2; size <= n; ++size) {
 
       // Unary operators
-      for (const auto& formula : formulas[size - 1]) {
+      for (const std::shared_ptr<Formula>& formula : formulas[size - 1]) {
          vector<UnOp> ops = { UnOp::Not };
-         for (auto op : ops) {
-            auto newFormula = make_shared<Formula>(UnaryOperation(op, formula));
+         for (UnOp op : ops) {
+            std::shared_ptr<Formula> newFormula = make_shared<Formula>(UnaryOperation(op, formula));
             formulas[size].insert(newFormula);
-            newFormula->printFormula();
 
             if (testFormula(*newFormula, examples)) {
-               cout << "Found !\n";
+               newFormula->printFormula();
                return;
             }
          }
@@ -55,16 +54,15 @@ void generateFormulas(int n, const vector<Example>& examples) {
 
       // Binary operators
       for (int k = 1; k <= size - 2; ++k) {
-         for (const auto& left : formulas[k]) {
-            for (const auto& right : formulas[size - k - 1]) {
+         for (const std::shared_ptr<Formula>& left : formulas[k]) {
+            for (const std::shared_ptr<Formula>& right : formulas[size - k - 1]) {
                vector<BinOp> ops = { BinOp::Plus, BinOp::Minus, BinOp::Mult, BinOp::And, BinOp::Or, BinOp::Xor };
-               for (auto op : ops) {
-                  auto newFormula = make_shared<Formula>(BinaryOperation(op, left, right));
+               for (BinOp op : ops) {
+                  std::shared_ptr<Formula> newFormula = make_shared<Formula>(BinaryOperation(op, left, right));
                   formulas[size].insert(newFormula);
-                  newFormula->printFormula();
 
                   if (testFormula(*newFormula, examples)) {
-                     cout << "Found !\n";
+                     newFormula->printFormula();
                      return;
                   }
                }
@@ -77,26 +75,13 @@ void generateFormulas(int n, const vector<Example>& examples) {
 }
 
 int main() {
-
-   const string filename = "benchmarks/672.json";
+   const string filename = "../benchmarks/test.json";
    vector<Example> examples = readExamples(filename);
 
-   generateFormulas(15, examples);
+   auto start = std::chrono::high_resolution_clock::now();
+   generateFormulas(10, examples);
+   auto end = std::chrono::high_resolution_clock::now();
+   std::chrono::duration<double> duration = end - start;
+   cout << "Time elapsed: " << duration.count() << " seconds" << endl;
    return 0;
-
-   // try {
-   //    vector<Example> examples = readExamples(filename);
-
-   //    // Display the examples
-   //    for (const auto& example : examples) {
-   //       cout << "Inputs: ";
-   //       for (const auto& input : example.inputs) {
-   //          cout << hex << input << " "; // Print inputs in hex
-   //       }
-   //       cout << "Output: " << hex << example.output << endl; // Print output in hex
-   //    }
-   // }
-   // catch (const exception& e) {
-   //    cerr << "Error: " << e.what() << endl;
-   // }
 }
