@@ -577,7 +577,7 @@ string MBA(
     int maxAllocationSize;
     cudaDeviceGetAttribute(&maxAllocationSize, cudaDevAttrMaxPitch, 0);
 
-    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint64_t));
+    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint64_t)) * 2;
     const int temp_MBACacheCapacity = MBACacheCapacity / 2;
 
     // Unary operators : ~, Neg
@@ -606,7 +606,7 @@ string MBA(
         uint64_t(0) - 2,  // Tombstone key
         warpcore::probing_schemes::QuadraticProbing<warpcore::hashers::MurmurHash <uint64_t>>>;
 
-    hash_set_t hashSet(MBACacheCapacity);
+    hash_set_t hashSet(2 * MBACacheCapacity);
 
     checkCuda(cudaMemcpy(d_MBACache, MBACache, numVar * numOfSamples * sizeof(uint64_t), cudaMemcpyHostToDevice));
     hashSetInit<hash_set_t> << <1, numVar >> > (numOfSamples, hashSet, d_MBACache);
