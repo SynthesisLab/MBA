@@ -618,7 +618,7 @@ string MBA(
     int maxAllocationSize;
     cudaDeviceGetAttribute(&maxAllocationSize, cudaDevAttrMaxPitch, 0);
 
-    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint64_t)) * 2;
+    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint64_t));
     const int temp_MBACacheCapacity = MBACacheCapacity / 2;
 
     // Unary operators : ~, Neg
