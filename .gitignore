@@ -1,3 +1,5 @@
 .vscode/
 benchmarks/
+simple_benchmarks/
+test_benchmarks/
 main

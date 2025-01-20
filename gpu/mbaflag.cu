@@ -28,30 +28,32 @@ cudaError_t checkCuda(cudaError_t res) {
     return res;
 }
 
-pair<vector<uint32_t>, vector<uint32_t>> readJsonFile(const string& filename) {
+tuple<uint32_t*, uint32_t*, int> readJsonFile(const std::string& filename) {
 
-    vector<uint32_t> inputData;
-    vector<uint32_t> outputData;
-    ifstream file(filename);
-
+    std::ifstream file(filename);
     if (!file) {
-        cerr << "Error: Could not open file " << filename << endl;
-        return { inputData, outputData };
+        std::cerr << "Error: Could not open file " << filename << std::endl;
+        return { nullptr, nullptr, 0 };
     }
 
     json j;
     file >> j;
 
     numVar = j["initial"]["inputs"].size();
+    const int numOfSamples = j["sampling"].size();
 
+    uint32_t* inputData = new uint32_t[numOfSamples * numVar];
+    uint32_t* outputData = new uint32_t[numOfSamples];
+
+    int idx = 0;
     for (const auto& example : j["sampling"]) {
+        outputData[idx / numVar] = std::stoul(example["outputs"]["0"]["value"].get<std::string>(), nullptr, 16);
         for (const auto& value : example["inputs"]) {
-            inputData.push_back(stoul(value["value"].get<string>(), nullptr, 16));
+            inputData[idx++] = std::stoul(value["value"].get<std::string>(), nullptr, 16);
         }
-        outputData.push_back(stoul(example["outputs"]["0"]["value"].get<string>(), nullptr, 16));
     }
 
-    return { inputData, outputData };
+    return { inputData, outputData, numOfSamples };
 }
 
 __device__ uint32_t simpleHash(uint32_t input) {
@@ -110,8 +112,9 @@ __device__ void applyOperator(
 {
 
     if constexpr (op == Op::Not) {
+        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = ~d_MBACache[ldx * numOfSamples + i];
+            CS[i] = ~d_MBACache[ldx * numOfSamples + i] & fixer;
         }
     } else if constexpr (op == Op::And) {
         for (int i = 0; i < numOfSamples; ++i) {
@@ -126,28 +129,33 @@ __device__ void applyOperator(
             CS[i] = d_MBACache[ldx * numOfSamples + i] ^ d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::LShift) {
+        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] << d_MBACache[rdx * numOfSamples + i];
+            CS[i] = (d_MBACache[ldx * numOfSamples + i] << d_MBACache[rdx * numOfSamples + i]) & fixer;
         }
     } else if constexpr (op == Op::RShift) {
         for (int i = 0; i < numOfSamples; ++i) {
             CS[i] = d_MBACache[ldx * numOfSamples + i] >> d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::Neg) {
+        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = -d_MBACache[ldx * numOfSamples + i];
+            CS[i] = -d_MBACache[ldx * numOfSamples + i] & fixer;
         }
     } else if constexpr (op == Op::Plus) {
+        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] + d_MBACache[rdx * numOfSamples + i];
+            CS[i] = d_MBACache[ldx * numOfSamples + i] + d_MBACache[rdx * numOfSamples + i] & fixer;
         }
     } else if constexpr (op == Op::Minus) {
+        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] - d_MBACache[rdx * numOfSamples + i];
+            CS[i] = d_MBACache[ldx * numOfSamples + i] - d_MBACache[rdx * numOfSamples + i] & fixer;
         }
     } else if constexpr (op == Op::Mul) {
+        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] * d_MBACache[rdx * numOfSamples + i];
+            CS[i] = d_MBACache[ldx * numOfSamples + i] * d_MBACache[rdx * numOfSamples + i] & fixer;
         }
     } else if constexpr (op == Op::Div) {
         for (int i = 0; i < numOfSamples; ++i) {
@@ -183,7 +191,7 @@ __device__ void insertInCache(
     uint32_t* CS,
     int tid, int ldx, int rdx,
     const int numOfSamples,
-    uint32_t* d_temp_MBACache,
+    uint32_t* d_temp_MBACache, bool* d_temp_boolCache,
     int* d_temp_leftIdx, int* d_temp_rightIdx,
     int* d_FinalMBAIdx)
 {
@@ -192,17 +200,18 @@ __device__ void insertInCache(
 
         for (int i = 0; i < numOfSamples; ++i) {
             d_temp_MBACache[tid * numOfSamples + i] = CS[i];
+            d_temp_boolCache[tid * numOfSamples + i] = true;
         }
         d_temp_leftIdx[tid] = ldx; d_temp_rightIdx[tid] = rdx;
 
         bool found = true;
-        for (int i = 0; found && i < numOfSamples; ++i) if (!(CS[i] == d_outputData[i])) found = false;
+        for (int i = 0; found && i < numOfSamples; ++i) found = (CS[i] == d_outputData[i]);
         if (found) atomicCAS(d_FinalMBAIdx, -1, tid);
 
     } else {
 
         for (int i = 0; i < numOfSamples; ++i) {
-            d_temp_MBACache[tid * numOfSamples + i] = (uint32_t)-1;
+            d_temp_boolCache[tid * numOfSamples + i] = false;
         }
         d_temp_leftIdx[tid] = -1; d_temp_rightIdx[tid] = -1;
 
@@ -215,7 +224,7 @@ __global__ void processOperator(
     const int idx1, const int idx2,
     const int idx3, const int idx4,
     const int numOfSamples,
-    uint32_t* d_MBACache, uint32_t* d_temp_MBACache,
+    uint32_t* d_MBACache, uint32_t* d_temp_MBACache, bool* d_temp_boolCache,
     int* d_temp_leftIdx, int* d_temp_rightIdx,
     int* d_FinalMBAIdx,
     hash_set_t hashSet)
@@ -230,14 +239,14 @@ __global__ void processOperator(
 
         int ldx = isUnary ? idx1 + tid : idx1 + tid / (idx4 - idx3 + 1);
         int rdx = isUnary ? 0 : idx3 + tid % (idx4 - idx3 + 1);
-        const int modifiedTid = notCommut ? (tid * 2) : tid;
+        const int modifiedTid = notCommut ? 2 * tid : tid;
         uint32_t CS[maxNumOfSamples];
         applyOperator<op>(CS, d_MBACache, ldx, rdx, numOfSamples);
 
         bool CS_is_unique = processUniqueCS(CS, numOfSamples, hashSet);
         insertInCache(
-            CS_is_unique, CS, modifiedTid, ldx, rdx, numOfSamples,
-            d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx
+            CS_is_unique, CS, modifiedTid, ldx, rdx, numOfSamples, d_temp_MBACache,
+            d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx
         );
 
         if (notCommut) {
@@ -246,8 +255,8 @@ __global__ void processOperator(
 
             bool CS_is_unique = processUniqueCS(CS, numOfSamples, hashSet);
             insertInCache(
-                CS_is_unique, CS, modifiedTid + 1, rdx, ldx, numOfSamples,
-                d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx
+                CS_is_unique, CS, modifiedTid + 1, rdx, ldx, numOfSamples, d_temp_MBACache,
+                d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx
             );
 
         }
@@ -262,8 +271,7 @@ bool storeUniqueMBAs(
     int& lastIdx,
     const int numOfSamples,
     const int MBACacheCapacity,
-    uint32_t* d_MBACache,
-    uint32_t* d_temp_MBACache,
+    uint32_t* d_MBACache, uint32_t* d_temp_MBACache, bool* d_temp_boolCache,
     int* d_leftIdx, int* d_rightIdx,
     int* d_temp_leftIdx, int* d_temp_rightIdx)
 {
@@ -271,17 +279,19 @@ bool storeUniqueMBAs(
     thrust::device_ptr<uint32_t> new_end_ptr;
     thrust::device_ptr<uint32_t> d_MBACache_ptr(d_MBACache + lastIdx * numOfSamples);
     thrust::device_ptr<uint32_t> d_temp_MBACache_ptr(d_temp_MBACache);
+    thrust::device_ptr<bool> d_temp_boolCache_ptr(d_temp_boolCache);
     thrust::device_ptr<int> d_leftIdx_ptr(d_leftIdx + lastIdx);
     thrust::device_ptr<int> d_rightIdx_ptr(d_rightIdx + lastIdx);
     thrust::device_ptr<int> d_temp_leftIdx_ptr(d_temp_leftIdx);
     thrust::device_ptr<int> d_temp_rightIdx_ptr(d_temp_rightIdx);
 
-    new_end_ptr =
-        thrust::remove(d_temp_MBACache_ptr, d_temp_MBACache_ptr + N * numOfSamples, (uint32_t)-1);
+    new_end_ptr = thrust::remove_if(
+        d_temp_MBACache_ptr, d_temp_MBACache_ptr + N * numOfSamples,
+        d_temp_boolCache_ptr, thrust::logical_not<bool>());
     thrust::remove(d_temp_leftIdx_ptr, d_temp_leftIdx_ptr + N, -1);
     thrust::remove(d_temp_rightIdx_ptr, d_temp_rightIdx_ptr + N, -1);
 
-    int numberOfNewUniqueMBAs = static_cast<int>(new_end_ptr - d_temp_MBACache_ptr) / (numOfSamples);
+    int numberOfNewUniqueMBAs = static_cast<int>(new_end_ptr - d_temp_MBACache_ptr) / numOfSamples;
     if (lastIdx + numberOfNewUniqueMBAs > MBACacheCapacity) {
         return true;
     } else {
@@ -461,10 +471,10 @@ bool generateMBAs(
     int MBALen,
     int* startPoints,
     const int temp_MBACacheCapacity, const int MBACacheCapacity,
-    uint64_t allMBAs,
-    int lastIdx,
+    uint64_t& allMBAs,
+    int& lastIdx,
     const int numOfSamples,
-    uint32_t* d_MBACache, uint32_t* d_temp_MBACache,
+    uint32_t* d_MBACache, uint32_t* d_temp_MBACache, bool* d_temp_boolCache,
     int* d_temp_leftIdx, int* d_temp_rightIdx,
     int* d_leftIdx, int* d_rightIdx,
     int* d_FinalMBAIdx, int* FinalMBAIdx,
@@ -489,12 +499,12 @@ bool generateMBAs(
                 y = x + min(temp_MBACacheCapacity - 1, idx2 - x);
                 N = y - x + 1;
 #ifndef MEASUREMENT_MODE
-                printf("Cost %-2d | %s | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
+                printf("Length %-2d | %s | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
                     MBALen, opStr, allMBAs, lastIdx, N);
 #endif
                 int Blc = (N + 1023) / 1024;
                 processOperator<op, hash_set_t> << <Blc, 1024 >> > (
-                    x, y, 0, 0, numOfSamples, d_MBACache, d_temp_MBACache,
+                    x, y, 0, 0, numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache,
                     d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx, hashSet
                     );
                 checkCuda(cudaPeekAtLastError());
@@ -503,7 +513,7 @@ bool generateMBAs(
                 if (*FinalMBAIdx != -1) { startPoints[MBALen * 12 + opIdx] = INT_MAX; return true; }
                 lastRound = storeUniqueMBAs(
                     N, lastIdx, numOfSamples, MBACacheCapacity, d_MBACache, d_temp_MBACache,
-                    d_leftIdx, d_rightIdx, d_temp_leftIdx, d_temp_rightIdx
+                    d_temp_boolCache, d_leftIdx, d_rightIdx, d_temp_leftIdx, d_temp_rightIdx
                 );
                 x = y + 1;
             } while (y < idx2 && !(lastRound));
@@ -519,21 +529,21 @@ bool generateMBAs(
             int idx3 = startPoints[(MBALen - i - 1) * 12];
             int idx4 = startPoints[(MBALen - i) * 12] - 1;
             int N = (idx4 - idx3 + 1) * (idx2 - idx1 + 1);
-            int modCap = notCommut ? (idx2 - idx1 + 1) - 1 : 2 * (idx2 - idx1 + 1) - 1;
+            int modCap = notCommut ? 2 * (idx2 - idx1 + 1) : idx2 - idx1 + 1;
 
             if (N) {
                 int x = idx3, y;
                 do {
-                    y = x + min(temp_MBACacheCapacity / modCap, idx4 - x);
+                    y = x + min(temp_MBACacheCapacity / modCap - 1, idx4 - x);
                     N = (y - x + 1) * (idx2 - idx1 + 1);
-                    int modN = notCommut ? N : 2 * N;
+                    int modN = notCommut ? 2 * N : N;
 #ifndef MEASUREMENT_MODE
-                    printf("Cost %-2d | %s | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
+                    printf("Length %-2d | %s | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
                         MBALen, opStr, allMBAs, lastIdx, modN);
 #endif
                     int Blc = (N + 1023) / 1024;
                     processOperator<op, hash_set_t> << <Blc, 1024 >> > (
-                        idx1, idx2, x, y, numOfSamples, d_MBACache, d_temp_MBACache,
+                        idx1, idx2, x, y, numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache,
                         d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx, hashSet
                         );
                     checkCuda(cudaPeekAtLastError());
@@ -542,7 +552,7 @@ bool generateMBAs(
                     if (*FinalMBAIdx != -1) { startPoints[MBALen * 12 + opIdx] = INT_MAX; return true; }
                     lastRound = storeUniqueMBAs(
                         modN, lastIdx, numOfSamples, MBACacheCapacity, d_MBACache, d_temp_MBACache,
-                        d_leftIdx, d_rightIdx, d_temp_leftIdx, d_temp_rightIdx
+                        d_temp_boolCache, d_leftIdx, d_rightIdx, d_temp_leftIdx, d_temp_rightIdx
                     );
                     x = y + 1;
                 } while (y < idx4 && !(lastRound));
@@ -550,7 +560,7 @@ bool generateMBAs(
 
         }
 
-        startPoints[MBALen * 14 + opIdx] = lastIdx;
+        startPoints[MBALen * 12 + opIdx] = lastIdx;
 
     }
 
@@ -560,15 +570,14 @@ bool generateMBAs(
 
 string MBA(
     const int maxLen,
-    vector<uint32_t> inputData,
-    vector<uint32_t> outputData)
+    const int numOfSamples,
+    uint32_t* inputData,
+    uint32_t* outputData)
 {
 
     // ---------------------------------
     // Generating and checking variables
     // ---------------------------------
-
-    const int numOfSamples = outputData.size();
 
     if (numOfSamples > maxNumOfSamples) {
         printf("This version supports at most %d samples.\n", maxNumOfSamples);
@@ -576,7 +585,7 @@ string MBA(
     }
 
     // Copying outputs into the constant memory
-    checkCuda(cudaMemcpyToSymbol(d_outputData, outputData.data(), numOfSamples * sizeof(uint32_t)));
+    checkCuda(cudaMemcpyToSymbol(d_outputData, outputData, numOfSamples * sizeof(uint32_t)));
 
     // Creating the cache
     uint32_t* MBACache = new uint32_t[numVar * numOfSamples];
@@ -588,7 +597,7 @@ string MBA(
     int lastIdx{};
 
 #ifndef MEASUREMENT_MODE
-    printf("Length %-2d | (V) | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
+    printf("Length %-2d | (V)   | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
         1, allMBAs, 0, numVar);
 #endif
 
@@ -598,7 +607,7 @@ string MBA(
         bool found = true;
         for (int j = 0; j < numOfSamples; j++) {
             MBACache[index++] = inputData[j * numVar + i];
-            if (!(inputData[j * numVar + i] = outputData[j])) found = false;
+            if (!(inputData[j * numVar + i] == outputData[j])) found = false;
         }
         allMBAs++; lastIdx++;
         if (found) return "v" + to_string(i);
@@ -611,12 +620,12 @@ string MBA(
     int maxAllocationSize;
     cudaDeviceGetAttribute(&maxAllocationSize, cudaDevAttrMaxPitch, 0);
 
-    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint32_t)) * 1.5;
+    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint32_t)) * 2;
     const int temp_MBACacheCapacity = MBACacheCapacity / 2;
 
     // Unary operators : ~, Neg
     // Binary operators : &, |, ^, <<, >>, +, -, *, /, %
-    int* startPoints = new int[(maxLen + 2) * 7]();
+    int* startPoints = new int[(maxLen + 2) * 12]();
     startPoints[(2 * 12) - 1] = lastIdx;
     startPoints[2 * 12] = lastIdx;
 
@@ -626,6 +635,7 @@ string MBA(
     checkCuda(cudaMemcpy(d_FinalMBAIdx, FinalMBAIdx, sizeof(int), cudaMemcpyHostToDevice));
 
     uint32_t* d_MBACache, * d_temp_MBACache;
+    bool* d_temp_boolCache;
     int* d_leftIdx, * d_rightIdx, * d_temp_leftIdx, * d_temp_rightIdx;
     checkCuda(cudaMalloc(&d_leftIdx, MBACacheCapacity * sizeof(int)));
     checkCuda(cudaMalloc(&d_rightIdx, MBACacheCapacity * sizeof(int)));
@@ -633,6 +643,7 @@ string MBA(
     checkCuda(cudaMalloc(&d_temp_rightIdx, temp_MBACacheCapacity * sizeof(int)));
     checkCuda(cudaMalloc(&d_MBACache, MBACacheCapacity * numOfSamples * sizeof(uint32_t)));
     checkCuda(cudaMalloc(&d_temp_MBACache, temp_MBACacheCapacity * numOfSamples * sizeof(uint32_t)));
+    checkCuda(cudaMalloc(&d_temp_boolCache, temp_MBACacheCapacity * numOfSamples * sizeof(bool)));
 
     using hash_set_t = warpcore::HashSet<
         uint64_t,         // Key type
@@ -640,7 +651,7 @@ string MBA(
         uint64_t(0) - 2,  // Tombstone key
         warpcore::probing_schemes::QuadraticProbing<warpcore::hashers::MurmurHash <uint64_t>>>;
 
-    hash_set_t hashSet(MBACacheCapacity);
+    hash_set_t hashSet(2 * MBACacheCapacity);
 
     checkCuda(cudaMemcpy(d_MBACache, MBACache, numVar * numOfSamples * sizeof(uint32_t), cudaMemcpyHostToDevice));
     hashSetInit<hash_set_t> << <1, numVar >> > (numOfSamples, hashSet, d_MBACache);
@@ -654,63 +665,63 @@ string MBA(
     for (int MBALen = 2; MBALen <= maxLen; ++MBALen) {
 
         lastRound = generateMBAs<Op::Not>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(~)", 1);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(~)  ", 1);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::And>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(&)", 2);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(&)  ", 2);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Or>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(|)", 3);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(|)  ", 3);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Xor>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(^)", 4);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(^)  ", 4);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::LShift>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(<<)", 5);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(<<) ", 5);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::RShift>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(>>)", 6);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(>>) ", 6);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Neg>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
             d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(Neg)", 7);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Plus>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(+)", 8);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(+)  ", 8);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Minus>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(-)", 9);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(-)  ", 9);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Mul>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(*)", 10);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(*)  ", 10);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Div>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(/)", 11);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(/)  ", 11);
         if (lastRound) break;
 
         lastRound = generateMBAs<Op::Mod>(MBALen, startPoints, temp_MBACacheCapacity, MBACacheCapacity, allMBAs, lastIdx,
-            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_leftIdx, d_temp_rightIdx,
-            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(%)", 12);
+            numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx,
+            d_leftIdx, d_rightIdx, d_FinalMBAIdx, FinalMBAIdx, hashSet, "(%)  ", 12);
         if (lastRound) break;
 
     }
@@ -727,6 +738,7 @@ string MBA(
     // Cleanup
     cudaFree(d_MBACache);
     cudaFree(d_temp_MBACache);
+    cudaFree(d_temp_boolCache);
     cudaFree(d_leftIdx);
     cudaFree(d_rightIdx);
     cudaFree(d_temp_leftIdx);
@@ -751,13 +763,13 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (atoi(argv[2]) < 1 || atoi(argv[11]) > 100) {
-        printf("Argument maxLen = = \"%s\" should be between 1 and 100", argv[2]);
+    if (atoi(argv[2]) < 1 || atoi(argv[2]) > 100) {
+        printf("Argument maxLen = %s should be between 1 and 100", argv[2]);
         return 0;
     }
 
     string fileName = argv[1];
-    auto [inputData, outputData] = readJsonFile(fileName);
+    auto [inputData, outputData, numOfSamples] = readJsonFile(fileName);
     int maxLen = atoi(argv[2]);
 
     // ------------------------------
@@ -768,7 +780,7 @@ int main(int argc, char* argv[]) {
     auto start = chrono::high_resolution_clock::now();
 #endif
 
-    string output = MBA(maxLen, inputData, outputData);
+    string output = MBA(maxLen, numOfSamples, inputData, outputData);
     if (output == "see_the_error") return 0;
 
 #ifdef MEASUREMENT_MODE
@@ -787,7 +799,7 @@ int main(int argc, char* argv[]) {
     printf("\nCost of Final LTL: %d", LTLcost);
     printf("\nRunning Time: %f s", (double)duration * 0.000001);
 #endif
-    printf("\n\nMBA: \"%s\"\n", output.c_str());
+    printf("\nMBA: \"%s\"\n", output.c_str());
 
     return 0;
 }
