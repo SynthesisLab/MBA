@@ -133,11 +133,11 @@ __device__ void applyBinOp(
         CS[i] = lRes & rRes; CS[i + numOfSamples] = lRes | rRes;
         CS[i + 2 * numOfSamples] = lRes ^ rRes; CS[i + 3 * numOfSamples] = lRes << rRes;
         CS[i + 4 * numOfSamples] = rRes << lRes; CS[i + 5 * numOfSamples] = lRes >> rRes;
-        CS[i + 2 * numOfSamples] = rRes >> lRes; CS[i + 2 * numOfSamples] = lRes + rRes;
-        CS[i + 2 * numOfSamples] = lRes - rRes; CS[i + 2 * numOfSamples] = rRes - lRes;
-        CS[i + 2 * numOfSamples] = lRes * rRes; CS[i + 2 * numOfSamples] = lRes / rRes;
-        CS[i + 2 * numOfSamples] = rRes / lRes; CS[i + 2 * numOfSamples] = lRes % rRes;
-        CS[i + 2 * numOfSamples] = rRes % lRes;
+        CS[i + 6 * numOfSamples] = rRes >> lRes; CS[i + 7 * numOfSamples] = lRes + rRes;
+        CS[i + 8 * numOfSamples] = lRes - rRes; CS[i + 9 * numOfSamples] = rRes - lRes;
+        CS[i + 10 * numOfSamples] = lRes * rRes; CS[i + 11 * numOfSamples] = lRes / rRes;
+        CS[i + 12 * numOfSamples] = rRes / lRes; CS[i + 13 * numOfSamples] = lRes % rRes;
+        CS[i + 14 * numOfSamples] = rRes % lRes;
     }
 
 }
@@ -155,7 +155,7 @@ __device__ bool processUniqueCS(
     for (int i = 0; i < numOfFormulas; ++i) {
         seed = 0;
         makeUnqChk(CS, i * numOfSamples, seed, numOfSamples);
-        d_CSUnq[i] = ~(hashSet.insert(seed, group) > 0);
+        d_CSUnq[i] = (hashSet.insert(seed, group) > 0) ? false : true;
     }
 
     return d_CSUnq;
@@ -178,12 +178,10 @@ __device__ void insertInCache(
 
     for (int j = 0; j < numOfFormulas; ++j) {
 
-        idx += numOfSamples;
-
         if (d_CSUnq[j]) {
 
             for (int i = 0; i < numOfSamples; ++i) {
-                d_temp_MBACache[shift + i + idx] = CS[i];
+                d_temp_MBACache[shift + i + idx] = CS[i + idx];
                 d_temp_boolCache[shift + i + idx] = true;
             }
             d_temp_leftIdx[modTid] = ldx; d_temp_rightIdx[modTid] = rdx;
@@ -204,6 +202,7 @@ __device__ void insertInCache(
         }
 
         modTid++;
+        idx += numOfSamples;
 
     }
 
@@ -450,7 +449,7 @@ bool generateUnaryMBAs(
             checkCuda(cudaPeekAtLastError());
             checkCuda(cudaMemcpy(FinalMBAIdx, d_FinalMBAIdx, sizeof(int), cudaMemcpyDeviceToHost));
             allMBAs += numOfUnaries * N;
-            if (*FinalMBAIdx != -1) { startPoints[MBALen] = INT_MAX; return true; }
+            if (*FinalMBAIdx != -1) return true;
             lastRound = storeUniqueMBAs(
                 numOfUnaries * N, lastIdx, numOfSamples, MBACacheCapacity, d_MBACache, d_temp_MBACache,
                 d_temp_boolCache, d_leftIdx, d_rightIdx, d_opIdx, d_temp_leftIdx, d_temp_rightIdx, d_temp_opIdx);
@@ -491,7 +490,7 @@ bool generateBinaryMBAs(
             int x = idx3, y;
             do {
                 y = x + min(temp_MBACacheCapacity / (numOfBinaries * (idx2 - idx1 + 1)) - 1, idx4 - x);
-                N = y - x + 1;
+                N = (y - x + 1) * (idx2 - idx1 + 1);
 #ifndef MEASUREMENT_MODE
                 printf("Length %-2d | BinOps | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
                     MBALen, allMBAs, lastIdx, numOfBinaries * N);
@@ -503,7 +502,7 @@ bool generateBinaryMBAs(
                 checkCuda(cudaPeekAtLastError());
                 checkCuda(cudaMemcpy(FinalMBAIdx, d_FinalMBAIdx, sizeof(int), cudaMemcpyDeviceToHost));
                 allMBAs += numOfBinaries * N;
-                if (*FinalMBAIdx != -1) { startPoints[MBALen] = INT_MAX; return true; }
+                if (*FinalMBAIdx != -1) return true;
                 lastRound = storeUniqueMBAs(
                     numOfBinaries * N, lastIdx, numOfSamples, MBACacheCapacity, d_MBACache, d_temp_MBACache,
                     d_temp_boolCache, d_leftIdx, d_rightIdx, d_opIdx, d_temp_leftIdx, d_temp_rightIdx, d_temp_opIdx);
@@ -513,7 +512,7 @@ bool generateBinaryMBAs(
 
     }
 
-    startPoints[MBALen + 1] = lastIdx + 1;
+    startPoints[MBALen + 1] = lastIdx;
     return lastRound;
 
 }
@@ -558,7 +557,7 @@ string MBA(
     int lastIdx{};
 
 #ifndef MEASUREMENT_MODE
-    printf("Length %-2d | (V)   | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
+    printf("Length %-2d | Vars   | AllMBAs: %-11lu | StoredMBAs: %-10d | ToBeChecked: %-10d \n",
         1, allMBAs, 0, numVar);
 #endif
 
@@ -581,7 +580,7 @@ string MBA(
     int maxAllocationSize;
     cudaDeviceGetAttribute(&maxAllocationSize, cudaDevAttrMaxPitch, 0);
 
-    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint32_t)) * 2;
+    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint32_t));
     const int temp_MBACacheCapacity = MBACacheCapacity / 2;
 
     // Unary operators : ~, Neg
