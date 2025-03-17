@@ -2,5 +2,11 @@
 benchmarks/
 simple_benchmarks/
 test_benchmarks/
-b2
+*.txt
 main
+gpu/mba
+gpu/mba_alt
+gpu/mbalight
+gpu/mbalight_alt
+gpu/mba_nocache
+gpu/mba_rpn
