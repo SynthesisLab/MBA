@@ -9,6 +9,8 @@
 #include <warpcore/hash_set.cuh>
 #include "json.hpp"
 
+// #define MEASUREMENT_MODE
+
 using namespace std;
 using json = nlohmann::json;
 
@@ -112,9 +114,8 @@ __device__ void applyOperator(
 {
 
     if constexpr (op == Op::Not) {
-        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = ~d_MBACache[ldx * numOfSamples + i] & fixer;
+            CS[i] = ~d_MBACache[ldx * numOfSamples + i];
         }
     } else if constexpr (op == Op::And) {
         for (int i = 0; i < numOfSamples; ++i) {
@@ -129,41 +130,50 @@ __device__ void applyOperator(
             CS[i] = d_MBACache[ldx * numOfSamples + i] ^ d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::LShift) {
-        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = (d_MBACache[ldx * numOfSamples + i] << d_MBACache[rdx * numOfSamples + i]) & fixer;
+            CS[i] = d_MBACache[ldx * numOfSamples + i] << d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::RShift) {
         for (int i = 0; i < numOfSamples; ++i) {
             CS[i] = d_MBACache[ldx * numOfSamples + i] >> d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::Neg) {
-        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = -d_MBACache[ldx * numOfSamples + i] & fixer;
+            CS[i] = -d_MBACache[ldx * numOfSamples + i];
         }
     } else if constexpr (op == Op::Plus) {
-        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] + d_MBACache[rdx * numOfSamples + i] & fixer;
+            CS[i] = d_MBACache[ldx * numOfSamples + i] + d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::Minus) {
-        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] - d_MBACache[rdx * numOfSamples + i] & fixer;
+            CS[i] = d_MBACache[ldx * numOfSamples + i] - d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::Mul) {
-        uint32_t fixer = 0xFFFFFFFF;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] * d_MBACache[rdx * numOfSamples + i] & fixer;
+            CS[i] = d_MBACache[ldx * numOfSamples + i] * d_MBACache[rdx * numOfSamples + i];
         }
     } else if constexpr (op == Op::Div) {
+        bool noZeros = true;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] / d_MBACache[rdx * numOfSamples + i];
+            if (d_MBACache[rdx * numOfSamples + i] == 0) noZeros = false;
+            else CS[i] = d_MBACache[ldx * numOfSamples + i] / d_MBACache[rdx * numOfSamples + i];
+        }
+        if (!noZeros) {
+            for (int i = 0; i < numOfSamples; ++i) {
+                CS[i] = d_MBACache[ldx * numOfSamples + i];
+            }
         }
     } else if constexpr (op == Op::Mod) {
+        bool noZeros = true;
         for (int i = 0; i < numOfSamples; ++i) {
-            CS[i] = d_MBACache[ldx * numOfSamples + i] % d_MBACache[rdx * numOfSamples + i];
+            if (d_MBACache[rdx * numOfSamples + i] == 0) noZeros = false;
+            else CS[i] = d_MBACache[ldx * numOfSamples + i] % d_MBACache[rdx * numOfSamples + i];
+        }
+        if (!noZeros) {
+            for (int i = 0; i < numOfSamples; ++i) {
+                CS[i] = d_MBACache[ldx * numOfSamples + i];
+            }
         }
     } else {
         [] <bool flag = false>() { static_assert(flag, "Unhandled operator"); }();
@@ -239,25 +249,22 @@ __global__ void processOperator(
 
         int ldx = isUnary ? idx1 + tid : idx1 + tid / (idx4 - idx3 + 1);
         int rdx = isUnary ? 0 : idx3 + tid % (idx4 - idx3 + 1);
-        const int modifiedTid = notCommut ? 2 * tid : tid;
+        const int modTid = notCommut ? 2 * tid : tid;
         uint32_t CS[maxNumOfSamples];
-        applyOperator<op>(CS, d_MBACache, ldx, rdx, numOfSamples);
 
+        applyOperator<op>(CS, d_MBACache, ldx, rdx, numOfSamples);
         bool CS_is_unique = processUniqueCS(CS, numOfSamples, hashSet);
         insertInCache(
-            CS_is_unique, CS, modifiedTid, ldx, rdx, numOfSamples, d_temp_MBACache,
-            d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx
-        );
+            CS_is_unique, CS, modTid, ldx, rdx, numOfSamples, d_temp_MBACache,
+            d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx);
 
         if (notCommut) {
 
             applyOperator<op>(CS, d_MBACache, rdx, ldx, numOfSamples);
-
             bool CS_is_unique = processUniqueCS(CS, numOfSamples, hashSet);
             insertInCache(
-                CS_is_unique, CS, modifiedTid + 1, rdx, ldx, numOfSamples, d_temp_MBACache,
-                d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx
-            );
+                CS_is_unique, CS, modTid + 1, rdx, ldx, numOfSamples, d_temp_MBACache,
+                d_temp_boolCache, d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx);
 
         }
 
@@ -334,6 +341,8 @@ __global__ void generateResIndices(
 
 }
 
+const string opStrs[12] = { "~", "&", "|", "^", "<<", ">>", "-", "+", "-", "*", "/", "%" };
+
 // Generating the final RE string recursively
 // When all the left and right indices are ready in the host
 string toString(
@@ -348,74 +357,18 @@ string toString(
     while (index >= startPoints[i]) { i++; }
     i--;
 
-    if (i % 12 == 0) {
+    int op = i % 12;
+    bool isUnary = (op == 0 | op == 6);
+
+    if (isUnary) {
         string res = toString(indicesMap[index].first, indicesMap, startPoints);
-        return "~(" + res + ")";
-    }
-
-    if (i % 12 == 1) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "&" + "(" + right + ")";
-    }
-
-    if (i % 12 == 2) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "|" + "(" + right + ")";
-    }
-
-    if (i % 12 == 3) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "^" + "(" + right + ")";
-    }
-
-    if (i % 12 == 4) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "<<" + "(" + right + ")";
-    }
-
-    if (i % 12 == 5) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + ">>" + "(" + right + ")";
-    }
-
-    if (i % 12 == 6) {
-        string res = toString(indicesMap[index].first, indicesMap, startPoints);
-        return "-(" + res + ")";
-    }
-
-    if (i % 12 == 7) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "+" + "(" + right + ")";
-    }
-
-    if (i % 12 == 8) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "-" + "(" + right + ")";
-    }
-
-    if (i % 12 == 9) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "*" + "(" + right + ")";
-    }
-
-    if (i % 12 == 10) {
-        string left = toString(indicesMap[index].first, indicesMap, startPoints);
-        string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "/" + "(" + right + ")";
+        return opStrs[op] + "(" + res + ")";
     }
 
     else {
         string left = toString(indicesMap[index].first, indicesMap, startPoints);
         string right = toString(indicesMap[index].second, indicesMap, startPoints);
-        return "(" + left + ")" + "%" + "(" + right + ")";
+        return "(" + left + ")" + opStrs[op] + "(" + right + ")";
     }
 
 }
@@ -505,8 +458,7 @@ bool generateMBAs(
                 int Blc = (N + 1023) / 1024;
                 processOperator<op, hash_set_t> << <Blc, 1024 >> > (
                     x, y, 0, 0, numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache,
-                    d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx, hashSet
-                    );
+                    d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx, hashSet);
                 checkCuda(cudaPeekAtLastError());
                 checkCuda(cudaMemcpy(FinalMBAIdx, d_FinalMBAIdx, sizeof(int), cudaMemcpyDeviceToHost));
                 allMBAs += N;
@@ -515,8 +467,9 @@ bool generateMBAs(
                     N, lastIdx, numOfSamples, MBACacheCapacity, d_MBACache, d_temp_MBACache,
                     d_temp_boolCache, d_leftIdx, d_rightIdx, d_temp_leftIdx, d_temp_rightIdx
                 );
+                if (lastRound) return true;
                 x = y + 1;
-            } while (y < idx2 && !(lastRound));
+            } while (y < idx2);
         }
         startPoints[MBALen * 12 + opIdx] = lastIdx;
 
@@ -544,8 +497,7 @@ bool generateMBAs(
                     int Blc = (N + 1023) / 1024;
                     processOperator<op, hash_set_t> << <Blc, 1024 >> > (
                         idx1, idx2, x, y, numOfSamples, d_MBACache, d_temp_MBACache, d_temp_boolCache,
-                        d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx, hashSet
-                        );
+                        d_temp_leftIdx, d_temp_rightIdx, d_FinalMBAIdx, hashSet);
                     checkCuda(cudaPeekAtLastError());
                     checkCuda(cudaMemcpy(FinalMBAIdx, d_FinalMBAIdx, sizeof(int), cudaMemcpyDeviceToHost));
                     allMBAs += modN;
@@ -554,8 +506,9 @@ bool generateMBAs(
                         modN, lastIdx, numOfSamples, MBACacheCapacity, d_MBACache, d_temp_MBACache,
                         d_temp_boolCache, d_leftIdx, d_rightIdx, d_temp_leftIdx, d_temp_rightIdx
                     );
+                    if (lastRound) return true;
                     x = y + 1;
-                } while (y < idx4 && !(lastRound));
+                } while (y < idx4);
             }
 
         }
@@ -564,7 +517,7 @@ bool generateMBAs(
 
     }
 
-    return lastRound;
+    return false;
 
 }
 
@@ -620,7 +573,7 @@ string MBA(
     int maxAllocationSize;
     cudaDeviceGetAttribute(&maxAllocationSize, cudaDevAttrMaxPitch, 0);
 
-    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint32_t)) * 2;
+    const int MBACacheCapacity = maxAllocationSize / (numOfSamples * sizeof(uint32_t));
     const int temp_MBACacheCapacity = MBACacheCapacity / 2;
 
     // Unary operators : ~, Neg
@@ -795,8 +748,8 @@ int main(int argc, char* argv[]) {
 
 #ifdef MEASUREMENT_MODE
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count();
-    printf("\nNumber of All LTLs: %lu", allLTLs);
-    printf("\nCost of Final LTL: %d", LTLcost);
+    // printf("\nNumber of All LTLs: %lu", allLTLs);
+    // printf("\nCost of Final LTL: %d", LTLcost);
     printf("\nRunning Time: %f s", (double)duration * 0.000001);
 #endif
     printf("\nMBA: \"%s\"\n", output.c_str());
