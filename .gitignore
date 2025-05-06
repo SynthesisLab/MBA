@@ -1,11 +1,13 @@
 .vscode/
 benchmarks/
+grammars/
 simple_benchmarks/
 test_benchmarks/
 *.txt
 main
 gpu/mba
 gpu/mba_alt
+gpu/mba_grammar
 gpu/mbalight
 gpu/mbalight_alt
 gpu/mba_nocache
