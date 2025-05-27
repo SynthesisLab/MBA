@@ -8,6 +8,7 @@ main
 gpu/mba
 gpu/mba_alt
 gpu/mba_grammar
+gpu/mba_grammar_gen
 gpu/mbalight
 gpu/mbalight_alt
 gpu/mba_nocache
