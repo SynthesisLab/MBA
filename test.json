@@ -1,0 +1,20 @@
+{
+  "numVariables": 1,
+  "numExamples": 1,
+  "examples": [
+    {
+      "inputs": [
+        {
+          "value": "0xaaaaaaaa",
+          "size": 32
+        }
+      ],
+      "outputs": [
+        {
+          "value": "0xbbbbbbbb",
+          "size": 32
+        }
+      ]
+    }
+  ]
+}
